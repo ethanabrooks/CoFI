@@ -26,7 +26,7 @@ import data_types
 import keyboard_control
 import osx_queue
 from data_types import (
-    DoNothingAction,
+    NoWorkersAction,
     Carrying,
     BuildingPositions,
     Assignment,
@@ -162,12 +162,8 @@ class Env(gym.Env):
         dependencies = np.round(self.random.random(n) * np.arange(n)) - 1
         dependencies = [None if i < 0 else buildings[int(i)] for i in dependencies]
 
-        # yield Assimilator(), None
-        # yield from itertools.zip_longest(buildings, dependencies)
-        dependency = None
-        for building in buildings:
-            yield building, dependency
-            dependency = building
+        yield Assimilator(), None
+        yield from itertools.zip_longest(buildings, dependencies)
 
     def build_lines(self, dependencies: Dependencies) -> List[Line]:
         def instructions_for(building: Building):
@@ -208,20 +204,7 @@ class Env(gym.Env):
 
         n_lines = self.n_lines_space.sample()
         instructions = [*random_instructions_under(n_lines)]
-        required = [i.building for i in instructions if i.required]
-        assert required.count(Assimilator()) <= 1
-
-        def reverse_instructions():
-            building = None
-            for building in dependencies.keys():
-                if building not in dependencies.values():
-                    break
-
-            while building is not None:
-                yield Line(building=building, required=True)
-                building = dependencies[building]
-
-        return [*reversed([*reverse_instructions()])][:n_lines]
+        return instructions
 
     @staticmethod
     def build_trees(dependencies: Dependencies) -> typing.Set[Tree]:
@@ -251,7 +234,7 @@ class Env(gym.Env):
         while True:
             # noinspection PyTypeChecker
             state = (
-                yield state.success or not state.time_remaining or not state.valid,
+                yield state.success or not state.time_remaining,
                 lambda: None,
             )
 
@@ -670,7 +653,7 @@ class Env(gym.Env):
         carrying: Carrying = {w: None for w in Worker}
         ptr: int = 0
         destroy = []
-        action = DoNothingAction()
+        action = NoWorkersAction()
         time_remaining = (1 + len(lines)) * self.time_per_line
         error_msg = None
 
@@ -707,51 +690,29 @@ class Env(gym.Env):
                 valid=error_msg is None,
             )
 
-            a: Optional[RawAction]
+            raw_action: Optional[RawAction]
             # noinspection PyTypeChecker
-            a = yield state, render
-
-            free_coord = next(
-                (
-                    coord
-                    for coord in data_types.Coord.possible_values()
-                    if coord not in [*building_positions.keys(), *positions.values()]
-                ),
-                None,
-            )
-            if free_coord is None:
-                invalid_error = "No free coordinates"
+            raw_action = yield state, render
+            if raw_action is None:
+                new_action = action.from_input()
+            elif isinstance(raw_action, RawAction):
+                a, ptr = raw_action.a, int(raw_action.ptr)
+                new_action = action.update(*a)
             else:
-                if a is None:
-                    # a: List[ActionComponent] = [*action.from_input()]
-                    new_action = action.from_input()
+                raise RuntimeError
 
-                elif isinstance(a, RawAction):
-                    (op, b), ptr = a.a, a.ptr
-                    b: int
-                    c = 1 + int(
-                        np.ravel_multi_index(
-                            free_coord, (self.world_size, self.world_size)
-                        )
-                    )
-                    new_action = action.update(op, 1, 0, 0, b, c)
-                else:
-                    raise RuntimeError
-
-                invalid_error = new_action.invalid(
-                    resources=resources,
-                    dependencies=dependencies,
-                    building_positions=building_positions,
-                    pending_positions=pending_positions,
-                    positions=positions,
-                )
-
-                if invalid_error is None:
-                    action = new_action
-            if invalid_error is not None:
+            error_msg = new_action.invalid(
+                resources=resources,
+                dependencies=dependencies,
+                building_positions=building_positions,
+                pending_positions=pending_positions,
+                positions=positions,
+            )
+            if error_msg is not None:
                 time_remaining -= 1  # penalize agent for invalid
                 continue
 
+            action = new_action
             assignment = action.assignment(positions)
             is_op = assignment is not None
             if is_op:
