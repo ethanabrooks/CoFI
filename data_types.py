@@ -820,6 +820,9 @@ class BuildingCoordAction(HasWorkers, NoWorkersAction):
         all_positions = {**building_positions, **pending_positions}
         if coord in all_positions:
             return f"coord occupied by {all_positions[coord]}"
+        insufficient_resources = Counter(self.building.cost) - resources
+        if insufficient_resources:
+            return "Insufficient resources"
         if isinstance(self.building, Assimilator):
             return (
                 None
